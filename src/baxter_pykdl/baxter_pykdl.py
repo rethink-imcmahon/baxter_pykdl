@@ -55,6 +55,9 @@ class baxter_kinematics(object):
         self._joint_names = self._limb_interface.joint_names()
         self._num_jnts = len(self._joint_names)
 
+        # Store joint information for future use
+        self.get_joint_information()
+
         # KDL Solvers
         self._fk_p_kdl = PyKDL.ChainFkSolverPos_recursive(self._arm_chain)
         self._fk_v_kdl = PyKDL.ChainFkSolverVel_recursive(self._arm_chain)
@@ -81,6 +84,33 @@ class baxter_kinematics(object):
         for idx in xrange(self._arm_chain.getNrOfSegments()):
             print '* ' + self._arm_chain.getSegment(idx).getName()
 
+    def get_joint_information(self):
+        joints = {}
+        for j in self._baxter.joints:
+            if j.type != 'fixed':
+                joints[j.name] = j
+        self.joint_limits_lower = []
+        self.joint_limits_upper = []
+        self.joint_types = []
+        for jnt_name in self._joint_names:
+            jnt = joints[jnt_name]
+            if jnt.limit is not None:
+                self.joint_limits_lower.append(jnt.limit.lower)
+                self.joint_limits_upper.append(jnt.limit.upper)
+            else:
+                self.joint_limits_lower.append(None)
+                self.joint_limits_upper.append(None)
+            self.joint_types.append(jnt.type)
+        def replace_none(x, v):
+            if x is None:
+                return v
+            return x
+        self.joint_limits_lower = np.array([replace_none(jl, -np.inf)
+                                            for jl in self.joint_limits_lower])
+        self.joint_limits_upper = np.array([replace_none(jl, np.inf)
+                                            for jl in self.joint_limits_upper])
+        self.joint_types = np.array(self.joint_types)
+
     def joints_to_kdl(self, type, values=None):
         kdl_array = PyKDL.JntArray(self._num_jnts)
 
@@ -93,7 +123,7 @@ class baxter_kinematics(object):
                 cur_type_values = self._limb_interface.joint_efforts()
         else:
             cur_type_values = values
-        
+
         for idx, name in enumerate(self._joint_names):
             kdl_array[idx] = cur_type_values[name]
         if type == 'velocities':
@@ -123,16 +153,16 @@ class baxter_kinematics(object):
                                  end_frame)
         return end_frame.GetTwist()
 
-    def inverse_kinematics(self, position, orientation=None, seed=None):
+    def inverse_kinematics(self, position, orientation=None, seed=None, min_joints=None, max_joints=None, maxiter=500, eps=1.0e-6):
         ik = PyKDL.ChainIkSolverVel_pinv(self._arm_chain)
         pos = PyKDL.Vector(position[0], position[1], position[2])
-        if orientation != None:
+        if orientation is not None:
             rot = PyKDL.Rotation()
             rot = rot.Quaternion(orientation[0], orientation[1],
                                  orientation[2], orientation[3])
         # Populate seed with current angles if not provided
         seed_array = PyKDL.JntArray(self._num_jnts)
-        if seed != None:
+        if seed is not None:
             seed_array.resize(len(seed))
             for idx, jnt in enumerate(seed):
                 seed_array[idx] = jnt
@@ -140,13 +170,25 @@ class baxter_kinematics(object):
             seed_array = self.joints_to_kdl('positions')
 
         # Make IK Call
-        if orientation:
+        if orientation is not None:
             goal_pose = PyKDL.Frame(rot, pos)
         else:
             goal_pose = PyKDL.Frame(pos)
         result_angles = PyKDL.JntArray(self._num_jnts)
 
-        if self._ik_p_kdl.CartToJnt(seed_array, goal_pose, result_angles) >= 0:
+        # Make IK solver with joint limits
+        if min_joints is None:
+            min_joints = self.joint_limits_lower
+        if max_joints is None:
+            max_joints = self.joint_limits_upper
+        mins_kdl = PyKDL.JntArray(len(min_joints))
+        for idx,jnt in enumerate(min_joints):  mins_kdl[idx] = jnt
+        maxs_kdl = PyKDL.JntArray(len(max_joints))
+        for idx,jnt in enumerate(max_joints):  maxs_kdl[idx] = jnt
+        ik_p_kdl = PyKDL.ChainIkSolverPos_NR_JL(self._arm_chain, mins_kdl, maxs_kdl,
+                                                self._fk_p_kdl, self._ik_v_kdl, maxiter, eps)
+
+        if ik_p_kdl.CartToJnt(seed_array, goal_pose, result_angles) >= 0:
             result = np.array(list(result_angles))
             return result
         else:
