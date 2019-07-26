@@ -96,8 +96,6 @@ class baxter_kinematics(object):
         
         for idx, name in enumerate(self._joint_names):
             kdl_array[idx] = cur_type_values[name]
-        if type == 'velocities':
-            kdl_array = PyKDL.JntArrayVel(kdl_array)
         return kdl_array
 
     def kdl_to_mat(self, data):
@@ -117,10 +115,13 @@ class baxter_kinematics(object):
         return np.array([pos[0], pos[1], pos[2],
                          rot[0], rot[1], rot[2], rot[3]])
 
-    def forward_velocity_kinematics(self,joint_velocities=None):
+    def forward_velocity_kinematics(self,joint_values=None,joint_velocities=None):
         end_frame = PyKDL.FrameVel()
-        self._fk_v_kdl.JntToCart(self.joints_to_kdl('velocities',joint_velocities),
-                                 end_frame)
+
+        kdl_JntArray_pos = self.joints_to_kdl('positions',joint_values)
+        kdl_JntArray_vel = self.joints_to_kdl('velocities',joint_velocities)
+        kdl_JntArrayVel = PyKDL.JntArrayVel(kdl_JntArray_pos, kdl_JntArray_vel)
+        self._fk_v_kdl.JntToCart(kdl_JntArrayVel, end_frame)
         return end_frame.GetTwist()
 
     def inverse_kinematics(self, position, orientation=None, seed=None):
